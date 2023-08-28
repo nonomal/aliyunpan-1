@@ -43,6 +43,8 @@ export interface IPageVideo {
   file_id: string
   parent_file_id: string
   file_name: string
+  html: string
+  play_cursor: number
 }
 
 export interface AppState {
@@ -71,7 +73,6 @@ const useAppStore = defineStore('app', {
     appTab: 'pan',
     appTabMenuMap: new Map<string, string>([
       ['pan', 'wangpan'],
-      ['pic', 'allpic'],
       ['down', 'DowningRight'],
       ['share', 'OtherShareRight'],
       ['rss', 'AppSame'],
@@ -121,7 +122,6 @@ const useAppStore = defineStore('app', {
         appTab: 'pan',
         appTabMenuMap: new Map<string, string>([
           ['pan', 'wangpan'],
-          ['pic', 'allpic'],
           ['down', 'DowningRight'],
           ['share', 'OtherShareRight'],
           ['rss', 'AppSame'],
@@ -161,10 +161,6 @@ const useAppStore = defineStore('app', {
     toggleTabNext() {
       switch (this.appTab) {
         case 'pan': {
-          this.appTab = 'pic'
-          break
-        }
-        case 'pic': {
           this.appTab = 'down'
           break
         }
@@ -204,10 +200,6 @@ const useAppStore = defineStore('app', {
       switch (this.appTab) {
         case 'pan': {
           next(this.appTabMenuMap, this.appTab, ['wangpan', 'kuaijie', 'fangying'])
-          break
-        }
-        case 'pic': {
-          next(this.appTabMenuMap, this.appTab, ['allpic', 'xiangce'])
           break
         }
         case 'down': {

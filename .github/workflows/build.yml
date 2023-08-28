@@ -1,19 +1,20 @@
-name: Build
+name: Build Test
 
 on:
   push:
     branches:
       - main
-
+    paths:
+      - '**'
+      - '!**.md'
+      - '!**/ISSUE_TEMPLATE/**'
 jobs:
-  release:
-    name: build and release
-    runs-on: ${{ matrix.os }}
+  build:
+    name: Build Test
+    runs-on: windows-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Git repository
@@ -25,52 +26,58 @@ jobs:
           node-version: 16
           registry-url: https://registry.npmjs.org/
 
-      - name: Get yarn cache directory path
+      - name: Get yarn cache path
         id: yarn-cache-dir-path
         run: echo "::set-output name=dir::$(yarn cache dir)"
 
-      - uses: actions/cache@v3
-        id: cache-yarn-cache
+      - name: Get LOCALAPPDATA Directory
+        id: local-app-data-path
+        run: echo "::set-output name=local_dir::$($env:LOCALAPPDATA)"
+
+      - name: Cache Yarn
+        uses: actions/cache@v3
         with:
           path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
           key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
 
-      - uses: actions/cache@v3
-        id: cache-node-modules
+      - name: Cache Node Modules
+        uses: actions/cache@v3
         with:
           path: node_modules
           key: ${{ runner.os }}-${{ matrix.node-version }}-nodemodules-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.node-version }}-nodemodules-
 
-      - name: Install Dependencies
-        if: |
-          steps.cache-yarn-cache.outputs.cache-hit != 'true' ||
-          steps.cache-node-modules.outputs.cache-hit != 'true'
+      - name: Cache Electron
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.local-app-data-path.outputs.local_dir }}/electron/Cache
+          key: ${{ runner.os }}-electron-cache-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-cache-
+
+      - name: Cache Electron-Builder
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.local-app-data-path.outputs.local_dir }}/electron-builder/Cache
+          key: ${{ runner.os }}-electron-builder-cache-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-builder-cache-
+
+      - name: Build Electron App
         run: |
           npm install -g yarn
           yarn install
-
-      - name: Build Electron App
-        run: yarn run build
+          yarn build:version
+          yarn build:electron
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.github_token }}
 
-      - name: Cleanup Artifacts for Linux
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          npx rimraf "release/!(*.AppImage)"
-
-      - name: Cleanup Artifacts for MacOS
-        if: matrix.os == 'macos-latest'
-        run: |
-          npx rimraf "release/!(*.dmg)"
-
-      - name: upload artifacts
+      - name: Upload Asar To Artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ matrix.os }}
+          name: app.asar
           path: |
-            release/**
+            release/win-unpacked/resources/app.asar

@@ -1,6 +1,16 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
-import { useAppStore, useKeyboardStore, KeyboardState, useSettingStore, useUserStore, useWinStore, useFootStore, useServerStore } from '../store'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import {
+  KeyboardState,
+  useAppStore,
+  useFootStore,
+  useKeyboardStore,
+  useMouseStore,
+  useServerStore,
+  useSettingStore,
+  useUserStore,
+  useWinStore
+} from '../store'
 import { onHideRightMenu, TestAlt, TestCtrl, TestKey, TestShift } from '../utils/keyboardhelper'
 import { getResourcesPath, openExternal } from '../utils/electronhelper'
 import DebugLog from '../utils/debuglog'
@@ -10,7 +20,6 @@ import Rss from '../rss/index.vue'
 import Share from '../share/index.vue'
 import Down from '../down/index.vue'
 import Pan from '../pan/index.vue'
-import Pic from '../pic/index.vue'
 
 import UserInfo from '../user/UserInfo.vue'
 import UserLogin from '../user/UserLogin.vue'
@@ -20,11 +29,15 @@ import MyModal from './MyModal.vue'
 import { B64decode } from '../utils/format'
 import { throttle } from '../utils/debounce'
 import ServerHttp from '../aliapi/server'
+import { existsSync, readFileSync } from 'fs'
+import os from 'os'
+import { getPkgVersion } from '../utils/utils'
 
 const panVisible = ref(true)
 const appStore = useAppStore()
 const winStore = useWinStore()
 const keyboardStore = useKeyboardStore()
+const mouseStore = useMouseStore()
 const footStore = useFootStore()
 
 const handlePanVisible = () => {
@@ -49,18 +62,14 @@ const handleHelpPage = () => {
 }
 
 keyboardStore.$subscribe((_m: any, state: KeyboardState) => {
-  console.log(state.KeyDownEvent)
-
   if (TestAlt('1', state.KeyDownEvent, () => appStore.toggleTab('pan'))) return
-  if (TestAlt('2', state.KeyDownEvent, () => appStore.toggleTab('pic'))) return
-  if (TestAlt('3', state.KeyDownEvent, () => appStore.toggleTab('down'))) return
-  if (TestAlt('4', state.KeyDownEvent, () => appStore.toggleTab('share'))) return
-  if (TestAlt('5', state.KeyDownEvent, () => appStore.toggleTab('rss'))) return
-  if (TestAlt('6', state.KeyDownEvent, () => appStore.toggleTab('setting'))) return
+  if (TestAlt('2', state.KeyDownEvent, () => appStore.toggleTab('down'))) return
+  if (TestAlt('3', state.KeyDownEvent, () => appStore.toggleTab('share'))) return
+  if (TestAlt('4', state.KeyDownEvent, () => appStore.toggleTab('rss'))) return
+  if (TestAlt('5', state.KeyDownEvent, () => appStore.toggleTab('setting'))) return
   if (TestAlt('f4', state.KeyDownEvent, () => handleHideClick(undefined))) return
   if (TestAlt('m', state.KeyDownEvent, () => handleMinClick(undefined))) return
   if (TestAlt('enter', state.KeyDownEvent, () => handleMaxClick(undefined))) return
-
   if (TestShift('tab', state.KeyDownEvent, () => appStore.toggleTabNext())) return
   if (TestCtrl('tab', state.KeyDownEvent, () => appStore.toggleTabNextMenu())) return
   if (TestAlt('l', state.KeyDownEvent, () => (useUserStore().userShowLogin = true))) return
@@ -70,10 +79,10 @@ keyboardStore.$subscribe((_m: any, state: KeyboardState) => {
   if (TestKey('f11', state.KeyDownEvent, f11)) return
 })
 
+
 const onResize = throttle(() => {
   const width = document.body.offsetWidth || 800
   const height = document.body.offsetHeight || 600
-
   if (winStore.width != width || winStore.height != height) winStore.updateStore({ width, height })
   // let ddsound = document.getElementById('ddsound') as { play: any } | undefined
   // if (ddsound) ddsound.play()
@@ -83,7 +92,6 @@ const onKeyDown = (event: KeyboardEvent) => {
   const ele = (event.srcElement || event.target) as any
   const nodeName = ele && ele.nodeName
   if (event.key === 'Tab') {
-
     event.preventDefault()
     event.stopPropagation()
     event.cancelBubble = true
@@ -92,11 +100,20 @@ const onKeyDown = (event: KeyboardEvent) => {
   }
   if (document.body.getElementsByClassName('arco-modal-container').length) return
   if (event.key == 'Control' || event.key == 'Shift' || event.key == 'Alt' || event.key == 'Meta') return
-
   const isInput = nodeName == 'INPUT' || nodeName == 'TEXTAREA' || false
   if (!isInput) {
     onHideRightMenu()
     keyboardStore.KeyDown(event)
+  }
+}
+
+const onMouseDown = (event: MouseEvent) => {
+  const ele = (event.srcElement || event.target) as any
+  const nodeName = ele && ele.nodeName
+  if (document.body.getElementsByClassName('arco-modal-container').length) return
+  const isInput = nodeName == 'INPUT' || nodeName == 'TEXTAREA' || false
+  if (!isInput) {
+    mouseStore.KeyDown(event)
   }
 }
 
@@ -112,30 +129,39 @@ onMounted(() => {
   DebugLog.aLoadFromDB()
   window.addEventListener('resize', onResize, { passive: true })
   window.addEventListener('keydown', onKeyDown, true)
-
+  window.addEventListener('mousedown', onMouseDown, true)
   setTimeout(() => {
     onHideRightMenu()
   }, 300)
-
   window.addEventListener('click', onHideRightMenu, { passive: true })
-
-  const css = document.getElementById('usercsslink')
-  const csshref = getResourcesPath('theme.css')
-  // if (css) css.setAttribute('href', 'file:///' + csshref) // TODO 没有这个文件？
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('mousedown', onMouseDown)
   window.removeEventListener('click', onHideRightMenu)
 })
 
+const getAppVersion = computed(() => {
+  const pkgVersion = getPkgVersion()
+  if (os.platform() === 'linux') {
+    return pkgVersion
+  }
+  let appVersion = ''
+  const localVersion = getResourcesPath('localVersion')
+  if (localVersion && existsSync(localVersion)) {
+    appVersion = readFileSync(localVersion, 'utf-8')
+  } else {
+    appVersion = pkgVersion
+  }
+  return appVersion
+})
 
 const verLoading = ref(false)
-
 const handleCheckVer = () => {
   verLoading.value = true
-  ServerHttp.CheckUpgrade(true).then(() => {
+  ServerHttp.CheckUpgrade().then(() => {
     verLoading.value = false
   })
 }
@@ -150,12 +176,12 @@ const handleCheckVer = () => {
         </a-button>
         <div class="title">阿里云盘</div>
 
-        <a-menu mode="horizontal" :selected-keys="[appStore.appTab]" @update:selected-keys="appStore.toggleTab($event[0])">
-          <a-menu-item key="pan" title="Alt+1">网盘</a-menu-item>
-<!--          <a-menu-item key="pic" title="Alt+2">相册</a-menu-item>-->
-          <a-menu-item key="down" title="Alt+3">传输</a-menu-item>
-          <a-menu-item key="share" title="Alt+4">分享</a-menu-item>
-          <a-menu-item key="rss" title="Alt+5">插件</a-menu-item>
+        <a-menu mode='horizontal' :selected-keys='[appStore.appTab]'
+                @update:selected-keys='appStore.toggleTab($event[0])'>
+          <a-menu-item key='pan' title='Alt+1'>网盘</a-menu-item>
+          <a-menu-item key='down' title='Alt+2'>传输</a-menu-item>
+          <a-menu-item key='share' title='Alt+3'>分享</a-menu-item>
+          <a-menu-item key='rss' title='Alt+4'>插件</a-menu-item>
         </a-menu>
 
         <div class="flexauto"></div>
@@ -177,13 +203,22 @@ const handleCheckVer = () => {
       </div>
     </a-layout-header>
     <a-layout-content id="xbybody">
-      <a-tabs type="text" :direction="'horizontal'" class="hidetabs" :justify="true" :active-key="appStore.appTab">
-        <a-tab-pane key="pan" title="1"><Pan :visible="panVisible"/></a-tab-pane>
-        <a-tab-pane key="pic" title="2"><Pic /></a-tab-pane>
-        <a-tab-pane key="down" title="3"><Down /></a-tab-pane>
-        <a-tab-pane key="share" title="4"><Share /></a-tab-pane>
-        <a-tab-pane key="rss" title="5"><Rss /></a-tab-pane>
-        <a-tab-pane key="setting" title="6"><Setting /></a-tab-pane>
+      <a-tabs type='text' :direction="'horizontal'" class='hidetabs' :justify='true' :active-key='appStore.appTab'>
+        <a-tab-pane key='pan' title='1'>
+          <Pan :visible='panVisible' />
+        </a-tab-pane>
+        <a-tab-pane key='down' title='2'>
+          <Down />
+        </a-tab-pane>
+        <a-tab-pane key='share' title='3'>
+          <Share />
+        </a-tab-pane>
+        <a-tab-pane key='rss' title='4'>
+          <Rss />
+        </a-tab-pane>
+        <a-tab-pane key='setting' title='5'>
+          <Setting />
+        </a-tab-pane>
       </a-tabs>
     </a-layout-content>
     <a-layout-footer id="xbyfoot" draggable="false">
@@ -235,7 +270,7 @@ const handleCheckVer = () => {
             <span class="footAria" title="Aria已离线" v-else> Aria ⚯ Offline </span>
           </div>
 
-          <!--<div class="footerBar fix" style="padding: 0 8px; cursor: pointer" @click="handleCheckVer">{{ Config.appVersion }}</div>-->
+          <div class="footerBar fix" style="padding: 0 8px; cursor: pointer" @click="handleCheckVer">{{ getAppVersion }}</div>
 
           <a-popover v-model:popup-visible="footStore.taskVisible" trigger="click" position="top" class="asynclist">
             <div class="footerBar fix" style="cursor: pointer">

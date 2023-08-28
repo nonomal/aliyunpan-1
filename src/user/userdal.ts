@@ -3,13 +3,13 @@ import AliUser from '../aliapi/user'
 import message from '../utils/message'
 import useUserStore, { ITokenInfo } from './userstore'
 import {
-  usePanTreeStore,
-  usePanFileStore,
-  useMyShareStore,
-  useMyFollowingStore,
-  useOtherFollowingStore,
   useAppStore,
   useFootStore,
+  useMyFollowingStore,
+  useMyShareStore,
+  useOtherFollowingStore,
+  usePanFileStore,
+  usePanTreeStore,
   useSettingStore
 } from '../store'
 import PanDAL from '../pan/pandal'
@@ -30,9 +30,8 @@ export default class UserDAL {
           if (token.user_id === defaultUser) {
             defaultUserAdd = true
             await this.UserLogin(token).catch(() => {})
-          } else if (token.user_id !== defaultUser && !defaultUserAdd) {
-            defaultUserAdd = true
-            await this.UserLogin(token).catch(() => {})
+          } else {
+            await this.autoUserSign(token)
           }
         }
       }
@@ -53,23 +52,14 @@ export default class UserDAL {
       const token = tokenList[i]
       try {
         const expire_time = new Date(token.expire_time).getTime()
-
-        if (expire_time - dateNow < 1800000) await AliUser.ApiTokenRefreshAccount(token, false)
-
+        const open_api_expire_time = new Date(token.open_api_expires_in).getTime()
+        // 自动刷新Token(过期3分钟)
+        if (expire_time - dateNow < 1000 * 60 * 3) {
+          await AliUser.ApiTokenRefreshAccount(token, false)
+          await AliUser.ApiSessionRefreshAccount(token, false)
+        }
       } catch (err: any) {
         DebugLog.mSaveDanger('aRefreshAllUserToken', err)
-      }
-    }
-  }
-
-  static async aRefreshAllUserSession() {
-    const tokenList = await DB.getUserAll()
-    for (let i = 0, maxi = tokenList.length; i < maxi; i++) {
-      const token = tokenList[i]
-      try {
-        await AliUser.ApiSessionRefreshAccount(token,  false)
-      } catch (err: any) {
-        DebugLog.mSaveDanger('aRefreshAllUserSession', err)
       }
     }
   }
@@ -85,6 +75,7 @@ export default class UserDAL {
       open_api_enable: false,
       open_api_access_token: '',
       open_api_refresh_token: '',
+      open_api_expires_in: 0,
 
       expires_in: 0,
       token_type: '',
@@ -94,6 +85,9 @@ export default class UserDAL {
       nick_name: '',
       default_drive_id: '',
       default_sbox_drive_id: '',
+      resource_drive_id: '',
+      backup_drive_id: '',
+      sbox_drive_id: '',
       role: '',
       status: '',
       expire_time: '',
@@ -109,9 +103,14 @@ export default class UserDAL {
       spaceinfo: '',
       vipname: '',
       vipexpire: '',
+      vipIcon: '',
       pic_drive_id: '',
       device_id: '',
-      signature: ''
+      signature: '',
+      signInfo: {
+        signMon: -1,
+        signDay: -1
+      }
     }
   }
 
@@ -156,62 +155,65 @@ export default class UserDAL {
     const loadingKey = 'userlogin_' + Date.now().toString()
     message.loading('加载用户信息中...', 0, loadingKey)
     UserTokenMap.set(token.user_id, token)
-
     // 加载用户信息
     await Promise.all([
-        AliUser.ApiUserInfo(token),
-        AliUser.ApiUserPic(token),
-        AliUser.ApiUserVip(token)
+      AliUser.ApiUserInfo(token),
+      AliUser.ApiUserDriveInfo(token),
+      AliUser.ApiUserPic(token),
+      AliUser.ApiUserVip(token)
     ])
-    // 刷新session
-    await AliUser.ApiSessionRefreshAccount(token, true)
     // 保存登录信息
-    useUserStore().userLogin(token.user_id)
     await DB.saveValueString('uiDefaultUser', token.user_id)
-    UserDAL.SaveUserToken(token)
+    useUserStore().userLogin(token.user_id)
+    // 登陆后自动签到
+    await UserDAL.autoUserSign(token)
     window.WebUserToken({
       user_id: token.user_id,
       name: token.user_name,
       access_token: token.access_token,
+      open_api_access_token: token.open_api_access_token,
       login: true
     })
-    useSettingStore().updateStore( {
-      uiEnableOpenApi: token.open_api_enable,
-      uiOpenApiAccessToken: token.open_api_access_token,
-      uiOpenApiRefreshToken: token.open_api_refresh_token
-    })
+    // 刷新Session
+    await AliUser.ApiSessionRefreshAccount(token, false)
+    // 刷新OpenApiToken
+    await AliUser.OpenApiTokenRefreshAccount(token, false)
+    // 刷新所有状态
     useAppStore().resetTab()
     useMyShareStore().$reset()
     useMyFollowingStore().$reset()
     useOtherFollowingStore().$reset()
     useFootStore().mSaveUserInfo(token)
-
-    PanDAL.aReLoadDrive(token.user_id, token.default_drive_id)
+    // 刷新网盘数据
+    await PanDAL.aReLoadBackupDrive(token)
+    await PanDAL.aReLoadResourceDrive(token)
+    // 展开文件夹
+    await PanDAL.aReLoadOneDirToShow(token.resource_drive_id, 'resource_root', true)
+    await PanDAL.aReLoadOneDirToShow(token.default_drive_id, 'backup_root', true)
     PanDAL.aReLoadQuickFile(token.user_id)
-    // PanDAL.aReLoadDirSizeFromDB(token.user_id, token.pic_drive_id)
-    // PanDAL.GetAllDirList(token.user_id, token.pic_drive_id)
-
     message.success('加载用户成功!', 2, loadingKey)
   }
 
 
   static async UserLogOff(user_id: string): Promise<boolean> {
-    DB.deleteUser(user_id)
+    await DB.deleteUser(user_id)
     UserTokenMap.delete(user_id)
-
 
     let newUserID = ''
     for (const [user_id, token] of UserTokenMap) {
       const isLogin = token.user_id && (await AliUser.ApiTokenRefreshAccount(token, false))
       if (isLogin) {
-        await this.UserLogin(token).catch(() => {
-        })
+        await this.UserLogin(token)
         newUserID = user_id
         break
       }
     }
-
     if (!newUserID) {
+      await useSettingStore().updateStore({
+        uiEnableOpenApi: false,
+        uiOpenApiAccessToken: '',
+        uiOpenApiRefreshToken: ''
+      })
       useUserStore().userLogOff()
       usePanTreeStore().$reset()
       usePanFileStore().$reset()
@@ -233,7 +235,7 @@ export default class UserDAL {
     const isLogin = token.user_id && (await AliUser.ApiTokenRefreshAccount(token, false))
     if (!isLogin) {
       message.warning('该账号需要重新登陆[' + token.name + ']')
-      DB.deleteUser(user_id)
+      await DB.deleteUser(user_id)
       UserTokenMap.delete(user_id)
       return false
     }
@@ -247,32 +249,52 @@ export default class UserDAL {
     if (!token || !token.access_token) {
       return false
     }
-
-    let time = Date.now() - (new Date(token.expire_time).getTime() - token.expires_in * 1000)
-    time = time / 1000
-
-    if (!force || time < 600) {
-      await Promise.all([AliUser.ApiUserInfo(token), AliUser.ApiUserPic(token), AliUser.ApiUserVip(token)])
+    let expires_in = new Date(token.expire_time).getTime() - token.expires_in * 1000
+    let time = Date.now() - expires_in
+    if (!force || time / 1000 < 600) {
+      // 仅刷新个人信息
+      await Promise.all([
+        AliUser.ApiUserInfo(token),
+        AliUser.ApiUserDriveInfo(token),
+        AliUser.ApiUserPic(token),
+        AliUser.ApiUserVip(token)
+      ])
       UserDAL.SaveUserToken(token)
       return true
     } else {
       // 刷新token和session
       const isToken = token.user_id && (await AliUser.ApiTokenRefreshAccount(token, true))
+      if (!isToken) return false
       const isSession = token.user_id && (await AliUser.ApiSessionRefreshAccount(token, true))
-      if (!isToken || !isSession) return false
+      const isOpenApiToken = token.user_id && (await AliUser.OpenApiTokenRefreshAccount(token, true, true))
       // 刷新用户信息
-      await Promise.all([AliUser.ApiUserInfo(token), AliUser.ApiUserPic(token), AliUser.ApiUserVip(token)])
+      await Promise.all([
+        AliUser.ApiUserInfo(token),
+        AliUser.ApiUserDriveInfo(token),
+        AliUser.ApiUserPic(token),
+        AliUser.ApiUserVip(token)
+      ])
       useUserStore().userLogin(token.user_id)
       UserDAL.SaveUserToken(token)
       return true
     }
   }
 
-  static async UserSign(user_id: string): Promise<boolean> {
-    const token = UserDAL.GetUserToken(user_id)
-    if (!token || !token.access_token) {
-      return false
+  static async autoUserSign(token: ITokenInfo) {
+    // 自动签到
+    if (token.user_id && useSettingStore().uiLaunchAutoSign) {
+      const nowMonth = new Date().getMonth() + 1
+      const nowDay = new Date().getDate()
+      if (!token.signInfo) token.signInfo = { signMon: -1, signDay: -1 }
+      const signInfo = token.signInfo
+      if (signInfo.signMon !== nowMonth || signInfo.signDay !== nowDay) {
+        const signDay = await AliUser.ApiUserSign(token)
+        if (signDay) {
+          signInfo.signMon = nowMonth
+          signInfo.signDay = signDay
+        }
+      }
     }
-    return AliUser.ApiUserSign(token)
+    UserDAL.SaveUserToken(token)
   }
 }

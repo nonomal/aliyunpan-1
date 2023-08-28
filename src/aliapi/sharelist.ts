@@ -26,7 +26,7 @@ export default class AliShareList {
 
     do {
       const isGet = await AliShareList.ApiShareListOnePage(dir)
-      if (isGet != true) {
+      if (!isGet) {
         break 
       }
     } while (dir.next_marker)
@@ -93,8 +93,8 @@ export default class AliShareList {
         dir.next_marker = resp.body.code
         message.warning('列出分享列表出错' + resp.body.code, 2)
         return false
-      } else {
-        DebugLog.mSaveWarning('_ShareListOnePage err=' + (resp.code || ''))
+      } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+        DebugLog.mSaveWarning('_ShareListOnePage err=' + (resp.code || ''), resp.body)
       }
     } catch (err: any) {
       DebugLog.mSaveDanger('_ShareListOnePage', err)

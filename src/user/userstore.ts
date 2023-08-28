@@ -5,13 +5,13 @@ import UserDAL from './userdal'
 export interface ITokenInfo {
   tokenfrom: 'token' | 'account'
 
-
   access_token: string
   refresh_token: string
 
   open_api_enable: boolean
   open_api_access_token: string
   open_api_refresh_token: string
+  open_api_expires_in: number
 
   signature: string
   device_id: string
@@ -19,10 +19,14 @@ export interface ITokenInfo {
   token_type: string
   user_id: string
   user_name: string
+
   avatar: string
   nick_name: string
   default_drive_id: string
   default_sbox_drive_id: string
+  resource_drive_id: string
+  backup_drive_id: string
+  sbox_drive_id: string
   role: string
   status: string
   expire_time: string
@@ -31,7 +35,6 @@ export interface ITokenInfo {
   is_first_login: boolean
   need_rp_verify: boolean
 
-
   name: string
   spu_id: string
   is_expires: boolean
@@ -39,10 +42,16 @@ export interface ITokenInfo {
   total_size: number
   spaceinfo: string
   vipname: string
+  vipIcon: string
   vipexpire: string
 
 
   pic_drive_id: string
+
+  signInfo: {
+    signMon: number;
+    signDay: number;
+  }
 }
 
 export interface UserState {

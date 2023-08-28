@@ -21,6 +21,7 @@ export function PageMain() {
       await ShareDAL.aLoadFromDB().catch((err: any) => {
         DebugLog.mSaveDanger('ShareDALLDB', err)
       })
+      // 加载数据库用户
       await UserDAL.aLoadFromDB().catch((err: any) => {
         DebugLog.mSaveDanger('UserDALLDB', err)
       })
@@ -28,6 +29,13 @@ export function PageMain() {
     .then(async () => {
       await Sleep(500)
 
+      // 启动时检查更新
+      if (useSettingStore().uiLaunchAutoCheckUpdate) {
+        ServerHttp.CheckUpgrade(false).catch((err: any) => {
+          DebugLog.mSaveDanger('CheckUpgrade', err)
+        })
+      }
+      // 重新启动未完成的下载和上传任务
       await DownDAL.aReloadDowning().catch((err: any) => {
         DebugLog.mSaveDanger('aReloadDowning', err)
       })
@@ -49,6 +57,7 @@ export function PageMain() {
         DebugLog.mSaveDanger('AppCacheDALDB', err)
       })
 
+      // 开启定时任务
       setTimeout(timeEvent, 1000)
     })
     .catch((err: any) => {
@@ -94,21 +103,24 @@ function timeEvent() {
     chkDirSizeTime = 0
   }
 
-  /*if (chkUpgradeTime1 > 0 && nowTime - chkUpgradeTime1 > 360) {
+  if (chkUpgradeTime1 > 0 && nowTime - chkUpgradeTime1 > 360) {
     chkUpgradeTime1 = -1
-    ServerHttp.CheckUpgrade(false).catch((err: any) => {
-      DebugLog.mSaveDanger('CheckUpgrade', err)
+    ServerHttp.CheckConfigUpgrade().catch((err: any) => {
+      DebugLog.mSaveDanger('CheckConfigUpgrade', err)
     })
   }
   if (nowTime - chkUpgradeTime2 > 14300) {
     chkUpgradeTime2 = nowTime
-    ServerHttp.CheckUpgrade(false).catch((err: any) => {
-      DebugLog.mSaveDanger('CheckUpgrade', err)
+    ServerHttp.CheckConfigUpgrade().catch((err: any) => {
+      DebugLog.mSaveDanger('CheckConfigUpgrade', err)
     })
-  }*/
+  }
 
+  // 自动刷新文件夹大小
   if (settingStore.uiFolderSize == true
-      && lockDirSizeTime == false && nowTime - runTime > 50 && chkDirSizeTime >= 10) {
+      && !lockDirSizeTime
+      && nowTime - runTime > 50
+      && chkDirSizeTime >= 10) {
     lockDirSizeTime = true
     PanDAL.aUpdateDirFileSize()
       .catch((err: any) => {
@@ -120,7 +132,7 @@ function timeEvent() {
       })
   } else chkDirSizeTime++
 
-
+  // 自动清除上传下载日志
   chkClearDownLogTime++
   if (nowTime - runTime > 60 && chkClearDownLogTime >= 540) {
     chkClearDownLogTime = 0
@@ -132,32 +144,31 @@ function timeEvent() {
     })
   }
 
-
+  // 自动刷新Token
   chkTokenTime++
   if (nowTime - runTime > 10 && chkTokenTime >= 600) {
     chkTokenTime = 0
     UserDAL.aRefreshAllUserToken().catch((err: any) => {
       DebugLog.mSaveDanger('aRefreshAllUserToken', err)
     })
-    UserDAL.aRefreshAllUserSession().catch((err: any) => {
-      DebugLog.mSaveDanger('aRefreshAllUserSession', err)
-    })
   }
 
+  // 异步任务
   chkTaskTime++
   if (nowTime - runTime > 6 && chkTaskTime >= 2) {
     chkTaskTime = 0
     useFootStore().aUpdateTask()
   }
 
-
+  // 刷新下载速度
   DownDAL.aSpeedEvent().catch((err: any) => {
     DebugLog.mSaveDanger('aSpeedEvent', err)
   })
 
   // 没有下载和上传时触发自动关闭
   if (settingStore.downAutoShutDown == 2) {
-    if (DownDAL.QueryIsDowning() == false && UploadingDAL.QueryIsUploading() == false) {
+    if (!DownDAL.QueryIsDowning()
+        && !UploadingDAL.QueryIsUploading()) {
       settingStore.downAutoShutDown = 0
       useAppStore().appShutDown = true
     }

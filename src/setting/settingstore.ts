@@ -1,9 +1,11 @@
 import { defineStore } from 'pinia'
 import DebugLog from '../utils/debuglog'
-import { getResourcesPath, getUserDataPath } from '../utils/electronhelper'
-import { useAppStore } from '../store'
+import { getUserDataPath } from '../utils/electronhelper'
+import { useAppStore, useUserStore } from '../store'
 import PanDAL from '../pan/pandal'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
+import UserDAL from '../user/userdal'
+import { isEmpty } from 'lodash'
 
 declare type ProxyType = 'none' | 'http' | 'https' | 'socks4' | 'socks4a' | 'socks5' | 'socks5h'
 
@@ -15,20 +17,28 @@ export interface SettingState {
   uiImageMode: string
 
   uiVideoMode: string
-
   uiVideoPlayer: string
-
+  uiVideoPlayerExit: boolean
+  uiVideoPlayerHistory: boolean
+  uiVideoSubtitleMode: string
   uiVideoPlayerPath: string
+  uiAutoPlaycursorVideo: boolean
 
   uiAutoColorVideo: boolean
-
-  uiAutoPlaycursorVideo: boolean
 
   uiShowPanPath: boolean
 
   uiShowPanMedia: boolean
 
   uiExitOnClose: boolean
+
+  uiLaunchAutoCheckUpdate: boolean
+
+  uiLaunchAutoSign: boolean
+
+  uiLaunchStart: boolean
+
+  uiLaunchStartShow: boolean
 
   uiEnableOpenApi: boolean
 
@@ -160,17 +170,24 @@ const setting: SettingState = {
   uiImageMode: 'fill',
   uiVideoMode: 'web',
   uiVideoPlayer: 'web',
+  uiVideoPlayerExit: false,
+  uiVideoPlayerHistory: false,
+  uiVideoSubtitleMode: 'auto',
   uiVideoPlayerPath: '',
-  uiAutoColorVideo: true,
   uiAutoPlaycursorVideo: true,
+  uiAutoColorVideo: true,
   uiShowPanPath: true,
   uiShowPanMedia: false,
   uiExitOnClose: false,
+  uiLaunchAutoCheckUpdate: false,
+  uiLaunchAutoSign: false,
+  uiLaunchStart: false,
+  uiLaunchStartShow: false,
   uiEnableOpenApi: false,
   uiOpenApi: 'inputToken',
   uiOpenApiClientId: '',
   uiOpenApiClientSecret: '',
-  uiOpenApiOauthUrl: 'https://api.nn.ci/alist/ali_open/token',
+  uiOpenApiOauthUrl: 'https://api.xhofe.top/alist/ali_open/token',
   uiOpenApiAccessToken: '',
   uiOpenApiRefreshToken: '',
   uiFolderSize: true,
@@ -243,17 +260,24 @@ function _loadSetting(val: any) {
   console.log('_loadSetting', val)
   setting.uiImageMode = defaultValue(val.uiImageMode, ['fill', 'width', 'web'])
   setting.uiVideoMode = defaultValue(val.uiVideoMode, ['web', 'online'])
-  setting.uiVideoPlayer = defaultValue(val.uiVideoPlayer, ['mpv', 'web', 'potplayer', 'other'])
+  setting.uiVideoPlayer = defaultValue(val.uiVideoPlayer, ['web', 'other'])
+  setting.uiVideoPlayerExit = defaultBool(val.uiVideoPlayerExit, false)
+  setting.uiVideoPlayerHistory = defaultBool(val.uiVideoPlayerHistory, false)
+  setting.uiVideoSubtitleMode = defaultValue(val.uiVideoSubtitleMode, ['close', 'auto', 'select'])
   setting.uiVideoPlayerPath = defaultString(val.uiVideoPlayerPath, '')
-  setting.uiAutoColorVideo = defaultBool(val.uiAutoColorVideo, true)
   setting.uiAutoPlaycursorVideo = defaultBool(val.uiAutoPlaycursorVideo, true)
+  setting.uiAutoColorVideo = defaultBool(val.uiAutoColorVideo, true)
   setting.uiShowPanPath = defaultBool(val.uiShowPanPath, true)
   setting.uiShowPanMedia = defaultBool(val.uiShowPanMedia, false)
   setting.uiExitOnClose = defaultBool(val.uiExitOnClose, false)
+  setting.uiLaunchAutoCheckUpdate = defaultBool(val.uiLaunchAutoCheckUpdate, false)
+  setting.uiLaunchAutoSign = defaultBool(val.uiLaunchAutoSign, false)
+  setting.uiLaunchStart = defaultBool(val.uiLaunchStart, false)
+  setting.uiLaunchStartShow = defaultBool(val.uiLaunchStartShow, false)
 
   setting.uiEnableOpenApi = defaultBool(val.uiEnableOpenApi, false)
   setting.uiOpenApi = defaultValue(val.uiOpenApi, ['inputToken', 'qrCode'])
-  setting.uiOpenApiOauthUrl = defaultString(val.uiOpenApiOauthUrl, 'https://api.nn.ci/alist/ali_open/token')
+  setting.uiOpenApiOauthUrl = defaultString(val.uiOpenApiOauthUrl, 'https://api.xhofe.top/alist/ali_open/token')
   setting.uiOpenApiAccessToken = defaultString(val.uiOpenApiAccessToken, '')
   setting.uiOpenApiRefreshToken = defaultString(val.uiOpenApiRefreshToken, '')
   setting.uiOpenApiClientId = defaultString(val.uiOpenApiClientId, '')
@@ -280,7 +304,7 @@ function _loadSetting(val: any) {
   setting.downSaveBreakWeiGui = defaultBool(val.downSaveBreakWeiGui, true)
   setting.uploadFileMax = defaultValue(val.uploadFileMax, [5, 1, 3, 5, 10, 20, 30, 50])
   setting.downFileMax = defaultValue(val.downFileMax, [5, 1, 3, 5, 10, 20, 30])
-  setting.downThreadMax = defaultValue(val.downThreadMax, [4, 1, 2, 4, 8, 16])
+  setting.downThreadMax = defaultValue(val.downThreadMax, [4, 1, 2, 4, 8, 16, 24, 32])
   setting.uploadGlobalSpeed = defaultNumberSub(val.uploadGlobalSpeed, 0, 0, 999)
   setting.uploadGlobalSpeedM = defaultValue(val.uploadGlobalSpeedM, ['MB', 'KB'])
   setting.downGlobalSpeed = defaultNumberSub(val.downGlobalSpeed, 0, 0, 999)
@@ -389,28 +413,36 @@ const useSettingStore = defineStore('setting', {
   getters: {
     AriaIsLocal(state: SettingState): boolean {
       return state.ariaState == 'local'
-    },
-    OpenApiAccessToken(state: SettingState): string {
-      return state.uiOpenApiAccessToken
     }
   },
   actions: {
-    updateStore(partial: Partial<SettingState>) {
-      if (partial.uiTimeFolderFormate) partial.uiTimeFolderFormate = partial.uiTimeFolderFormate.replace('mm-dd', 'MM-dd').replace('HH-MM', 'HH-mm')
+    async updateStore(partial: Partial<SettingState>) {
+      if (partial.uiTimeFolderFormate) {
+        partial.uiTimeFolderFormate = partial.uiTimeFolderFormate
+          .replace('mm-dd', 'MM-dd').replace('HH-MM', 'HH-mm')
+      }
       this.$patch(partial)
+      if (Object.hasOwn(partial, 'uiLaunchStart')) {
+        window.WebToElectron({ cmd: { launchStart: this.uiLaunchStart, launchStartShow: this.uiLaunchStartShow } })
+      }
+      if (Object.hasOwn(partial, 'uiEnableOpenApi')
+          || Object.hasOwn(partial, 'uiOpenApiAccessToken')
+          || Object.hasOwn(partial, 'uiOpenApiRefreshToken')) {
+        await this.updateOpenApiToken()
+      }
+      if (Object.hasOwn(partial, 'uiShowPanMedia')
+          || Object.hasOwn(partial, 'uiFolderSize')
+          || Object.hasOwn(partial, 'uiFileOrderDuli')) {
+        await PanDAL.aReLoadOneDirToShow('', 'refresh', false)
+      }
       if (Object.hasOwn(partial, 'proxyUseProxy')) {
         this.WebSetProxy()
       }
       SaveSetting()
+      useAppStore().toggleTheme(setting.uiTheme)
       window.WinMsgToUpload({ cmd: 'SettingRefresh' })
       window.WinMsgToDownload({ cmd: 'SettingRefresh' })
-      useAppStore().toggleTheme(setting.uiTheme)
-
-      if (Object.hasOwn(partial, 'uiShowPanMedia') || Object.hasOwn(partial, 'uiFolderSize') || Object.hasOwn(partial, 'uiFileOrderDuli')) {
-        PanDAL.aReLoadOneDirToShow('', 'refresh', false)
-      }
     },
-
     updateFileColor(key: string, title: string) {
       if (!key) return
       const arr = setting.uiFileColorArray.concat()
@@ -440,6 +472,26 @@ const useSettingStore = defineStore('setting', {
         }
       }
       window.WebSetProxy({ proxyUrl: proxy })
+    },
+    async updateOpenApiToken() {
+      const token = await UserDAL.GetUserTokenFromDB(useUserStore().user_id)
+      if (!token) return
+      Object.assign(token, {
+        open_api_enable: this.uiEnableOpenApi,
+        open_api_access_token: this.uiOpenApiAccessToken,
+        open_api_refresh_token: this.uiOpenApiRefreshToken
+      })
+      window.WebUserToken({
+        user_id: token.user_id,
+        name: token.user_name,
+        access_token: token.access_token,
+        open_api_access_token: token.open_api_access_token,
+        refresh: true
+      })
+      if (isEmpty(token.open_api_access_token)) {
+        token.open_api_expires_in = 0
+      }
+      UserDAL.SaveUserToken(token)
     }
   }
 })

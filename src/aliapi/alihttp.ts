@@ -1,12 +1,12 @@
 import { ITokenInfo } from '../user/userstore'
 import UserDAL from '../user/userdal'
-import axios, { AxiosResponse } from 'axios'
+import { AxiosResponse } from 'axios'
+import axios from '../axios'
 import jschardet from 'jschardet'
 import AliUser from './user'
 import message from '../utils/message'
 import DebugLog from '../utils/debuglog'
 import { v4 } from 'uuid'
-import { useSettingStore } from '../store'
 
 export interface IUrlRespData {
   code: number
@@ -34,19 +34,6 @@ function BlobToBuff(body: Blob): Promise<ArrayBuffer | undefined> {
   })
 }
 
-
-function HttpCodeBreak(code: number): Boolean {
-  if (code >= 200 && code <= 300) return true
-  if (code == 400) return true
-  // if (code == 401) return true
-  if (code >= 402 && code <= 428) return true
-  // if (code == 403) return true
-  if (code == 404) return true
-  if (code == 409) return true
-  if (code == 429) return true
-  return false
-}
-
 function Sleep(msTime: number): Promise<{ success: true; time: number }> {
   return new Promise((resolve) =>
     setTimeout(
@@ -62,12 +49,21 @@ function Sleep(msTime: number): Promise<{ success: true; time: number }> {
 
 const IsDebugHttp = false
 export default class AliHttp {
-  static LimitMax = 100
   static baseApi = 'https://api.aliyundrive.com/'
-  static baseOpenApi = 'https://open.aliyundrive.com/'
+  static baseOpenApi = 'https://openapi.aliyundrive.com/'
   
   static IsSuccess(code: number): Boolean {
     return code >= 200 && code <= 300
+  }
+
+  static HttpCodeBreak(code: number): Boolean {
+    if (code >= 200 && code <= 300) return true
+    if (code == 400) return true
+    // if (code == 401) return true
+    if (code >= 402 && code <= 428) return true
+    if (code == 404) return true
+    if (code == 409) return true
+    return false
   }
 
   static async CatchError(error: any, token: ITokenInfo | undefined): Promise<IUrlRespData> {
@@ -75,7 +71,7 @@ export default class AliHttp {
       if (IsDebugHttp) console.log('CALLURLError ', error)
       const errorMessage = error.display_message || error.message || ''
       if (error.response) {
-        let { code, status, data = undefined, headers = undefined} = error.response
+        let { code, status, config, data = undefined, headers = undefined} = error.response
         if (code == 'ERR_NETWORK' || (status == 0 && !headers)) {
           DebugLog.mSaveWarning('HttpError0 message=' + errorMessage)
           return { code: 600, header: '', body: 'NetError 网络无法连接' } as IUrlRespData
@@ -84,6 +80,7 @@ export default class AliHttp {
         if (status == 429) isNeedLog = false
         if (data && data.code) {
           let errCode = [
+            'NotFound.File',
             'InvalidParameter.Limit',
             'ForbiddenFileInTheRecycleBin',
             'PreHashMatched',
@@ -96,19 +93,38 @@ export default class AliHttp {
             'UserDeviceIllegality',
             'UserDeviceOffline',
             'DeviceSessionSignatureInvalid',
+            'AccessTokenInvalid',
+            'AccessTokenExpired',
+            'I400JD',
           ]
           if (errCode.includes(data.code)) isNeedLog = false
           // 自动刷新Token
-          if (data.code == 'AccessTokenInvalid') {
+          if (data.code == 'AccessTokenInvalid'
+            || data.code == 'AccessTokenExpired'
+            || data.code == 'I400JD') {
             if (token) {
-              if (!useSettingStore().uiEnableOpenApi && window.IsMainPage) {
-                return await AliUser.ApiTokenRefreshAccount(token, true).then((isLogin: boolean) => {
-                  return { code: 401, header: '', body: 'NetError 账号需要重新登录' } as IUrlRespData
+              const isOpenApi = config.url.includes('adrive/v1.0')
+              if (!isOpenApi) {
+                return await AliUser.ApiTokenRefreshAccount(token, true, true).then((isLogin: boolean) => {
+                  if (isLogin) {
+                    return { code: 401, header: '', body: '' } as IUrlRespData
+                  }
+                  return { code: 403, header: '', body: 'NetError 账号需要重新登录' } as IUrlRespData
                 })
-              }
-              if (useSettingStore().uiEnableOpenApi) {
-                return await AliUser.OpenApiTokenRefreshAccount(token, true).then((isLogin: boolean) => {
-                  return { code: 401, header: '', body: 'OpenApiRefreshToken失效或未填写，请获取后填入' } as IUrlRespData
+              } else {
+                if (token.open_api_access_token && !token.open_api_refresh_token) {
+                  if (!token.open_api_refresh_token) {
+                    return { code: 403, header: '', body: '刷新OpenApiToken失败,未填写【RefreshToken】' } as IUrlRespData
+                  }
+                }
+                if (!token.open_api_access_token && !token.open_api_refresh_token) {
+                  return { code: 403, header: '', body: 'OpenApi启用失败,请检查配置' } as IUrlRespData
+                }
+                return await AliUser.OpenApiTokenRefreshAccount(token, true, true).then((flag: boolean) => {
+                  if (flag) {
+                    return { code: 401, header: '', body: '' } as IUrlRespData
+                  }
+                  return { code: 403, header: '', body: '刷新OpenApiToken失败，请检查配置' } as IUrlRespData
                 })
               }
             } else {
@@ -116,16 +132,15 @@ export default class AliHttp {
             }
           }
 
-          if (data.code == 'Too Many Requests') {
-            return { code: 429, header: '', body: '获取OpenApiAccessToken失败，请勿重复请求' } as IUrlRespData
-          }
-
           // 自动刷新Session
           if (data.code == 'UserDeviceIllegality'
               || data.code == 'UserDeviceOffline'
               || data.code == 'DeviceSessionSignatureInvalid') {
             if (token) {
-              return await AliUser.ApiSessionRefreshAccount(token,  true).then((isLogin: boolean) => {
+              return await AliUser.ApiSessionRefreshAccount(token,  true).then((flag: boolean) => {
+                if (flag) {
+                  return { code: 401, header: '', body: '' } as IUrlRespData
+                }
                 return { code: 403, header: '', body: '刷新Session失败' } as IUrlRespData
               })
             } else {
@@ -173,7 +188,7 @@ export default class AliHttp {
     if (!url.startsWith('http') && !url.startsWith('https')) url = AliHttp.baseApi + url
     for (let i = 0; i <= 5; i++) {
       const resp = await AliHttp._Get(url, user_id)
-      if (HttpCodeBreak(resp.code)) return resp
+      if (AliHttp.HttpCodeBreak(resp.code)) return resp
       else if (i == 5) return resp
       else await Sleep(2000)
     }
@@ -214,7 +229,7 @@ export default class AliHttp {
     if (!url.startsWith('http') && !url.startsWith('https')) url = AliHttp.baseApi + url
     for (let i = 0; i <= 5; i++) {
       const resp = await AliHttp._GetString(url, user_id, fileSize, maxSize)
-      if (HttpCodeBreak(resp.code)) return resp
+      if (AliHttp.HttpCodeBreak(resp.code)) return resp
       else if (i == 5) return resp
       else await Sleep(2000)
     }
@@ -301,7 +316,7 @@ export default class AliHttp {
     if (!url.startsWith('http') && !url.startsWith('https')) url = AliHttp.baseApi + url
     for (let i = 0; i <= 5; i++) {
       const resp = await AliHttp._GetBlob(url, user_id)
-      if (HttpCodeBreak(resp.code)) return resp
+      if (AliHttp.HttpCodeBreak(resp.code)) return resp
       else if (i == 5) return resp
       else await Sleep(2000)
     }
@@ -349,7 +364,7 @@ export default class AliHttp {
           || url.includes('/file/walk')
           || url.includes('/file/scan'))
           && !resp.body?.code) await Sleep(2000)
-      else if (HttpCodeBreak(resp.code)) return resp
+      else if (AliHttp.HttpCodeBreak(resp.code)) return resp
       else if (i == 5) return resp
       else await Sleep(2000)
     }
@@ -364,8 +379,8 @@ export default class AliHttp {
       }
       if (token) {
         let access_token = token.access_token
-        if (need_open_api && useSettingStore().uiEnableOpenApi && useSettingStore().OpenApiAccessToken) {
-          access_token = useSettingStore().OpenApiAccessToken
+        if (need_open_api && token.open_api_enable && token.open_api_access_token) {
+          access_token = token.open_api_access_token
         }
         headers['Authorization'] = token.token_type + ' ' + access_token
         headers['x-request-id'] = v4().toString()
@@ -402,7 +417,7 @@ export default class AliHttp {
     if (!url.startsWith('http') && !url.startsWith('https')) url = AliHttp.baseApi + url
     for (let i = 0; i <= 5; i++) {
       const resp = await AliHttp._PostString(url, postData, user_id, share_token)
-      if (HttpCodeBreak(resp.code)) return resp
+      if (AliHttp.HttpCodeBreak(resp.code)) return resp
       else if (i == 5) return resp
       else await Sleep(2000)
     }

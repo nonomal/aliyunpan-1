@@ -6,10 +6,11 @@ import AliHttp from './alihttp'
 import { IAliFileItem, IAliGetDirModel, IAliGetFileModel, IAliGetForderSizeModel } from './alimodels'
 import AliDirFileList from './dirfilelist'
 import { ICompilationList, IDownloadUrl, IOfficePreViewUrl, IVideoPreviewUrl, IVideoXBTUrl } from './models'
+import { GetDriveType } from './utils'
 
 export default class AliFile {
-  
-  static async ApiFileInfo(user_id: string, drive_id: string, file_id: string): Promise<IAliFileItem | undefined> {
+
+  static async ApiFileInfo(user_id: string, drive_id: string, file_id: string): Promise<any | undefined> {
     if (!user_id || !drive_id || !file_id) return undefined
     let url = ''
     let postData = {}
@@ -37,14 +38,24 @@ export default class AliFile {
     const resp = await AliHttp.Post(url, postData, user_id, '', true)
 
     if (AliHttp.IsSuccess(resp.code)) {
-      return resp.body as IAliFileItem
-    } else {
-      DebugLog.mSaveWarning('ApiFileInfo err=' + file_id + ' ' + (resp.code || ''))
+      let fileInfo = resp.body as IAliFileItem
+      if (fileInfo.name.toLowerCase() === 'default') {
+        fileInfo.name = '备份盘'
+      } else if (fileInfo.name.toLowerCase() === 'resource') {
+        fileInfo.name = '资源盘'
+      } else if (fileInfo.name.toLowerCase() === 'alibum') {
+        fileInfo.name = '相册'
+      }
+      return fileInfo
+    } else if (AliHttp.HttpCodeBreak(resp.code)) {
+      return (resp.body.message || resp.body) as string
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiFileInfo err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
-    return undefined
+    return '网络错误'
   }
 
-  
+
   static async ApiFileInfoByPath(user_id: string, drive_id: string, file_path: string): Promise<IAliFileItem | undefined> {
     if (!user_id || !drive_id || !file_path) return undefined
     if (!file_path.startsWith('/')) file_path = '/' + file_path
@@ -62,8 +73,8 @@ export default class AliFile {
 
     if (AliHttp.IsSuccess(resp.code)) {
       return resp.body as IAliFileItem
-    } else {
-      DebugLog.mSaveWarning('ApiFileInfoByPath err=' + file_path + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiFileInfoByPath err=' + file_path + ' ' + (resp.code || ''), resp.body)
     }
     return undefined
   }
@@ -89,7 +100,6 @@ export default class AliFile {
       expire_sec: useSettingStore().uiEnableOpenApi ? '36000' : expire_sec
     }
     const resp = await AliHttp.Post(url, postData, user_id, '', true)
-
     if (AliHttp.IsSuccess(resp.code)) {
       data.url = resp.body.url
       data.size = resp.body.size
@@ -99,10 +109,12 @@ export default class AliFile {
       return '文件已从网盘中彻底删除'
     } else if (resp.body.code == 'ForbiddenFileInTheRecycleBin') {
       return '文件已放入回收站'
+    } else if (AliHttp.HttpCodeBreak(resp.code)) {
+      return (resp.body.message || resp.body) as string
     } else if (resp.body.code) {
       return resp.body.code as string
-    } else {
-      DebugLog.mSaveWarning('ApiFileDownloadUrl err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiFileDownloadUrl err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return '网络错误'
   }
@@ -115,14 +127,24 @@ export default class AliFile {
     } else {
       url = 'v2/file/get_video_preview_play_info'
     }
-    const postData = { drive_id: drive_id, file_id: file_id, category: 'live_transcoding', template_id: '', get_subtitle_info: true, url_expire_sec: 14400 }
+    const postData = {
+      drive_id: drive_id,
+      file_id: file_id,
+      category: 'live_transcoding',
+      template_id: '',
+      get_subtitle_info: true,
+      url_expire_sec: 14400
+    }
     const resp = await AliHttp.Post(url, postData, user_id, '', true)
 
     if (resp.body.code == 'VideoPreviewWaitAndRetry') {
       message.warning('视频正在转码中，稍后重试')
       return undefined
     }
-
+    if (resp.body.code == 'ExceedCapacityForbidden') {
+      message.warning('容量超限限制播放，需要扩容或者删除不必要的文件释放空间')
+      return undefined
+    }
     const data: IVideoPreviewUrl = {
       drive_id: drive_id,
       file_id: file_id,
@@ -147,6 +169,7 @@ export default class AliFile {
       }
       const taskList = resp.body.video_preview_play_info?.live_transcoding_task_list || []
       for (let i = 0, maxi = taskList.length; i < maxi; i++) {
+        if (taskList[i].url.indexOf('pdsapi.aliyundrive.com') > 0) continue // 非OpenApi无法播放
         if (taskList[i].template_id && taskList[i].template_id == 'QHD' && taskList[i].status == 'finished') {
           data.urlQHD = taskList[i].url
         } else if (taskList[i].template_id && taskList[i].template_id == 'FHD' && taskList[i].status == 'finished') {
@@ -159,14 +182,14 @@ export default class AliFile {
           data.urlLD = taskList[i].url
         }
       }
-      data.url =  data.urlQHD || data.urlFHD || data.urlHD || data.urlSD || data.urlLD || ''
+      data.url = data.urlQHD || data.urlFHD || data.urlHD || data.urlSD || data.urlLD || ''
       data.duration = Math.floor(resp.body.video_preview_play_info?.meta?.duration || 0)
       data.width = resp.body.video_preview_play_info?.meta?.width || 0
       data.height = resp.body.video_preview_play_info?.meta?.height || 0
       data.expire_sec = GetOssExpires(data.url)
       return data
-    } else {
-      DebugLog.mSaveWarning('ApiVideoPreviewUrl err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiVideoPreviewUrl err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return undefined
   }
@@ -193,20 +216,20 @@ export default class AliFile {
           url: item.url,
           expire_sec: GetOssExpires(item.url),
           play_cursor: Math.floor(item?.play_cursor || 0),
-          compilation_id: item.compilation_id,
+          compilation_id: item.compilation_id
         })
       }
       return data
-    } else {
-      DebugLog.mSaveWarning('ApiListByFileInfo err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiListByFileInfo err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
   }
 
   static async ApiAudioPreviewUrl(user_id: string, drive_id: string, file_id: string): Promise<IDownloadUrl | undefined> {
     if (!user_id || !drive_id || !file_id) return undefined
-    
+
     const url = 'v2/file/get_audio_play_info'
-    
+
     const postData = { drive_id: drive_id, file_id: file_id, url_expire_sec: 14400 }
     const resp = await AliHttp.Post(url, postData, user_id, '')
 
@@ -235,8 +258,8 @@ export default class AliFile {
       }
 
       return data
-    } else {
-      DebugLog.mSaveWarning('ApiAudioPreviewUrl err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiAudioPreviewUrl err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return undefined
   }
@@ -256,8 +279,8 @@ export default class AliFile {
       data.access_token = resp.body.access_token
       data.preview_url = resp.body.preview_url
       return data
-    } else {
-      DebugLog.mSaveWarning('ApiOfficePreViewUrl err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiOfficePreViewUrl err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return undefined
   }
@@ -278,13 +301,13 @@ export default class AliFile {
 
     if (AliHttp.IsSuccess(resp.code)) {
       return AliDirFileList.getFileInfo(resp.body as IAliFileItem, '')
-    } else {
-      DebugLog.mSaveWarning('ApiGetFile err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiGetFile err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return undefined
   }
 
-  
+
   static async ApiFileGetPath(user_id: string, drive_id: string, file_id: string): Promise<IAliGetDirModel[]> {
     if (!user_id || !drive_id || !file_id) return []
     const url = 'adrive/v1/file/get_path'
@@ -293,11 +316,14 @@ export default class AliFile {
       file_id: file_id
     }
     const resp = await AliHttp.Post(url, postData, user_id, '')
-
-    if (AliHttp.IsSuccess(resp.code) && resp.body.items && resp.body.items.length > 0) {
+    const driveType = GetDriveType(user_id, drive_id)
+    let items = resp.body.items
+    if (AliHttp.IsSuccess(resp.code) && items && items.length > 0) {
       const list: IAliGetDirModel[] = []
-      for (let i = resp.body.items.length - 1; i > 0; i--) {
-        const item = resp.body.items[i]
+      for (let i = items.length - 1; i >= 0; i--) {
+        const item = items[i]
+        console.log('item', item)
+        if (item.name === 'Default' || item.name === 'resource') continue
         list.push({
           __v_skip: true,
           drive_id: item.drive_id,
@@ -307,33 +333,39 @@ export default class AliFile {
           namesearch: HanToPin(item.name),
           size: item.size || 0,
           time: new Date(item.updated_at).getTime(),
-          
           description: item.description || ''
         } as IAliGetDirModel)
       }
       list.push({
         __v_skip: true,
         drive_id: drive_id,
-        file_id: 'root',
+        file_id: driveType.key,
         parent_file_id: '',
-        name: '根目录',
-        namesearch: HanToPin('root'),
+        name: driveType.title,
+        namesearch: HanToPin(driveType.title),
         size: 0,
         time: 0,
-        
         description: ''
       } as IAliGetDirModel)
       return list
-    } else {
-      DebugLog.mSaveWarning('ApiFileGetPath err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiFileGetPath err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return []
   }
 
-  
+
   static async ApiFileGetPathString(user_id: string, drive_id: string, file_id: string, dirsplit: string): Promise<string> {
     if (!user_id || !drive_id || !file_id) return ''
-    if (file_id == 'root') return '根目录'
+    if (file_id.includes('root')) {
+      if (file_id.startsWith('backup')) {
+        return '备份盘'
+      } else if (file_id.startsWith('resource')) {
+        return '资源盘'
+      } else if (file_id.startsWith('pic')) {
+        return '相册'
+      }
+    }
     const url = 'adrive/v1/file/get_path'
     const postData = {
       drive_id: drive_id,
@@ -348,17 +380,17 @@ export default class AliFile {
         list.push(item.name)
       }
       return list.join(dirsplit)
-    } else {
-      DebugLog.mSaveWarning('ApiFileGetPathString err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiFileGetPathString err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return ''
   }
 
-  
+
   static async ApiFileGetFolderSize(user_id: string, drive_id: string, file_id: string): Promise<IAliGetForderSizeModel | undefined> {
     if (!user_id || !drive_id || !file_id) return undefined
     const url = 'adrive/v1/file/get_folder_size_info'
-    
+
     const postData = {
       drive_id: drive_id,
       file_id: file_id
@@ -367,28 +399,31 @@ export default class AliFile {
 
     if (AliHttp.IsSuccess(resp.code)) {
       return resp.body as IAliGetForderSizeModel
-    } else {
-      DebugLog.mSaveWarning('ApiFileGetFolderSize err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiFileGetFolderSize err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return { size: 0, folder_count: 0, file_count: 0, reach_limit: false }
   }
 
-  
+
   static async ApiFileDownText(user_id: string, drive_id: string, file_id: string, filesize: number, maxsize: number): Promise<string> {
     if (!user_id || !drive_id || !file_id) return ''
     const downUrl = await AliFile.ApiFileDownloadUrl(user_id, drive_id, file_id, 14400)
     if (typeof downUrl == 'string') return downUrl
-    const resp = await AliHttp.GetString(downUrl.url, '', filesize, maxsize) 
+    // 原始文件大小
+    if (filesize === -1) filesize = downUrl.size
+    if (maxsize === -1) maxsize = downUrl.size
+    const resp = await AliHttp.GetString(downUrl.url, '', filesize, maxsize)
     if (AliHttp.IsSuccess(resp.code)) {
       if (typeof resp.body == 'string') return resp.body
       return JSON.stringify(resp.body, undefined, 2)
-    } else {
-      DebugLog.mSaveWarning('ApiFileDownText err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiFileDownText err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return ''
   }
 
-  
+
   static async ApiBiXueTuBatch(user_id: string, drive_id: string, file_id: string, duration: number, imageCount: number, imageWidth: number): Promise<IVideoXBTUrl[]> {
     if (!user_id || !drive_id || !file_id) return []
     if (duration <= 0) return []
@@ -402,7 +437,12 @@ export default class AliFile {
       mtime += subtime
       if (mtime > duration) break
       const postData = {
-        body: { drive_id: drive_id, file_id: file_id, url_expire_sec: 14400, video_thumbnail_process: 'video/snapshot,t_' + mtime.toString() + '000,f_jpg,ar_auto,m_fast,w_' + imageWidth.toString() },
+        body: {
+          drive_id: drive_id,
+          file_id: file_id,
+          url_expire_sec: 14400,
+          video_thumbnail_process: 'video/snapshot,t_' + mtime.toString() + '000,f_jpg,ar_auto,m_fast,w_' + imageWidth.toString()
+        },
         headers: { 'Content-Type': 'application/json' },
         id: (i.toString() + file_id).substr(0, file_id.length),
         method: 'POST',
@@ -446,46 +486,32 @@ export default class AliFile {
           console.log(responses[i])
         }
       }
-    } else {
-      DebugLog.mSaveWarning('ApiBiXueTuBatch err=' + file_id + ' ' + (resp.code || ''))
+    } else if (!AliHttp.HttpCodeBreak(resp.code)) {
+      DebugLog.mSaveWarning('ApiBiXueTuBatch err=' + file_id + ' ' + (resp.code || ''), resp.body)
     }
     return imgList
   }
 
-  
+
   static async ApiUpdateVideoTime(user_id: string, drive_id: string, file_id: string, play_cursor: number): Promise<IAliFileItem | undefined> {
-    if (!useSettingStore().uiAutoPlaycursorVideo) return 
+    if (!useSettingStore().uiAutoPlaycursorVideo) return
     if (!user_id || !drive_id || !file_id) return undefined
-    const url = 'v2/file/get'
-    const postData = {
+    let url = ''
+    if (useSettingStore().uiEnableOpenApi) {
+      url = 'adrive/v1.0/openFile/video/updateRecord'
+    } else {
+      url = 'adrive/v2/video/update'
+    }
+    const postVideoData = {
       drive_id: drive_id,
       file_id: file_id,
-      url_expire_sec: 14400,
-      office_thumbnail_process: 'image/resize,w_400/format,jpeg',
-      image_thumbnail_process: 'image/resize,w_400/format,jpeg',
-      image_url_process: 'image/resize,w_1920/format,jpeg',
-      video_thumbnail_process: 'video/snapshot,t_' + Math.floor(play_cursor) + ',f_jpg,w_0,h_0,m_fast'
+      play_cursor: play_cursor.toString()
     }
-    const resp = await AliHttp.Post(url, postData, user_id, '')
-
-    if (AliHttp.IsSuccess(resp.code)) {
-      const info = resp.body as IAliFileItem
-
-      const urlvideo = 'adrive/v2/video/update'
-      const postVideoData = {
-        drive_id: drive_id,
-        file_id: file_id,
-        play_cursor: play_cursor.toString(),
-        thumbnail: info.thumbnail || ''
-      }
-      const respvideo = await AliHttp.Post(urlvideo, postVideoData, user_id, '')
-      if (AliHttp.IsSuccess(respvideo.code)) {
-        return respvideo.body as IAliFileItem
-      } else {
-        DebugLog.mSaveWarning('ApiUpdateVideoTime2 err=' + file_id + ' ' + (respvideo.code || ''))
-      }
+    const respvideo = await AliHttp.Post(url, postVideoData, user_id, '')
+    if (AliHttp.IsSuccess(respvideo.code)) {
+      return respvideo.body as IAliFileItem
     } else {
-      DebugLog.mSaveWarning('ApiUpdateVideoTime err=' + file_id + ' ' + (resp.code || ''))
+      DebugLog.mSaveWarning('ApiUpdateVideoTime err=' + file_id + ' ' + (respvideo.code || ''), respvideo.body)
     }
     return undefined
   }
